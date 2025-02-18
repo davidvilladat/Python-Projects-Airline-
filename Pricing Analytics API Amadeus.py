@@ -5,36 +5,53 @@ import re
 
 from amadeus import Client, ResponseError
 
-# -----------------------------
+# ------------------------------------------------------------
 # 1. Configure Logging
-# -----------------------------
+# ------------------------------------------------------------
+# Sets up basic logging for the script, so that messages can 
+# be displayed in the console. The 'format' specifies how 
+# each log message should look.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# -----------------------------
+# ------------------------------------------------------------
 # 2. Amadeus Credentials
-# -----------------------------
+# ------------------------------------------------------------
+# Provide your Amadeus API credentials here. 
+# In a production environment, avoid hardcoding sensitive info.
 amadeus_client = Client(
     client_id='pNYUh6kEI8K4JbqkXl79xCZcI2IMbs37',
     client_secret='v8hJNTTa1DfLvXG7'
 )
 
-# -----------------------------
+# ------------------------------------------------------------
 # 3. Initialize Amadeus Client
+# ------------------------------------------------------------
+# (Already initialized above in 'amadeus_client')
 
-
-# -----------------------------
+# ------------------------------------------------------------
 # 4. Fetch Flight Offers
-# -----------------------------
+# ------------------------------------------------------------
 def get_flight_offers(amadeus_client, origin, destination,
                       departure_date, return_date,
                       adults=1, max_results=10):
     """
     Retrieves flight offers from Amadeus for round-trip flights.
+    
+    :param amadeus_client: The authenticated Amadeus client.
+    :param origin: Origin airport code (e.g., 'LHR').
+    :param destination: Destination airport code (e.g., 'BOM').
+    :param departure_date: Departure date in 'YYYY-MM-DD' format.
+    :param return_date: Return date in 'YYYY-MM-DD' format.
+    :param adults: Number of adult passengers.
+    :param max_results: Maximum number of flight offers to retrieve.
+    :return: A list of raw flight offers in JSON format.
     """
     try:
+        # Calls the Amadeus API to fetch flight offers based on 
+        # specified query parameters.
         response = amadeus_client.shopping.flight_offers_search.get(
             originLocationCode=origin,
             destinationLocationCode=destination,
@@ -43,22 +60,29 @@ def get_flight_offers(amadeus_client, origin, destination,
             adults=adults,
             max=max_results
         )
-        return response.data  # List of raw flight offers (JSON format)
+        return response.data  # The offers are returned as JSON data.
     except ResponseError as error:
+        # If an error occurs while calling the API, log the error message.
         logging.error(f"Error while fetching flight offers: {error}")
         return []
 
-# -----------------------------
+# ------------------------------------------------------------
 # 5. Helper Parsing Functions
-# -----------------------------
+# ------------------------------------------------------------
 def iso_to_datetime(iso_str):
-    """Convert ISO 8601 string (e.g. '2025-06-01T10:15:00') into a datetime object."""
+    """
+    Convert an ISO 8601 date/time string (e.g., '2025-06-01T10:15:00') 
+    into a Python datetime object.
+    """
     return datetime.fromisoformat(iso_str)
 
 def parse_ISO8601_duration(duration_str):
     """
-    Parse an ISO 8601 duration string like 'PT14H20M' into a timedelta object.
-    (E.g., 'PT2H10M' => 2 hours, 10 minutes)
+    Parse an ISO 8601 duration string (e.g., 'PT14H20M') into 
+    a timedelta object representing hours/minutes/seconds.
+    
+    For example:
+      'PT2H10M' => 2 hours, 10 minutes.
     """
     pattern = r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$"
     match = re.match(pattern, duration_str)
@@ -71,7 +95,13 @@ def parse_ISO8601_duration(duration_str):
 
 def find_cabin_and_class(segment_id, traveler_pricings):
     """
-    Match 'segmentId' with travelerPricings->fareDetailsBySegment to find cabin & booking class.
+    Given a segment ID and traveler pricing data, determine the 
+    cabin (e.g., Economy, Business) and booking class (e.g., 'Y', 'B') 
+    for that particular flight segment.
+    
+    :param segment_id: Unique ID for a flight segment.
+    :param traveler_pricings: Pricing details at the traveler level.
+    :return: A tuple (cabin, booking_class).
     """
     for tp in traveler_pricings:
         fare_details = tp.get("fareDetailsBySegment", [])
@@ -83,9 +113,14 @@ def find_cabin_and_class(segment_id, traveler_pricings):
 def parse_itinerary(itinerary_data, traveler_pricings):
     """
     Parse a single itinerary (which can have multiple segments),
-    extracting total duration, each segment's departure/arrival, layover, cabin, etc.
-    Returns a dict with 'total_duration' and a 'segments' list.
+    extracting the total duration and each segment's details, 
+    such as departure/arrival times, layover, cabin, etc.
+    
+    :param itinerary_data: Dictionary containing itinerary details (duration, segments).
+    :param traveler_pricings: List of pricing details for travelers, used for cabin/booking class info.
+    :return: A dictionary with 'total_duration' and a 'segments' list.
     """
+    # Overall itinerary duration (includes all segments).
     itinerary_duration_str = itinerary_data.get("duration", "PT0M")
     itinerary_duration = parse_ISO8601_duration(itinerary_duration_str)
 
@@ -108,10 +143,10 @@ def parse_itinerary(itinerary_data, traveler_pricings):
         segment_duration = parse_ISO8601_duration(segment_duration_str)
         stops = seg.get("numberOfStops", 0)
 
-        # Determine cabin/class from travelerPricings
+        # Determine the cabin/class for this segment.
         cabin, booking_class = find_cabin_and_class(seg_id, traveler_pricings)
 
-        # Calculate layover duration (time between previous arrival and this departure)
+        # Calculate layover duration compared to the previous segment.
         if i == 0:
             layover_duration = "N/A"
         else:
@@ -145,12 +180,12 @@ def parse_itinerary(itinerary_data, traveler_pricings):
 
 def parse_offers_detailed(flight_offers):
     """
-    Parse the raw flight offers, returning a list of dictionaries.
-    Each entry describes a full round-trip offer:
-      - total_price (grandTotal)
-      - currency
-      - outbound (duration & segments)
-      - inbound  (duration & segments)
+    Take raw flight offers and transform them into a structured list 
+    that includes total price, currency, and details for outbound/inbound 
+    itineraries (segments, duration, cabin, etc.).
+    
+    :param flight_offers: The raw offers (list of dictionaries) returned from the API.
+    :return: A list of parsed flight offers with key information.
     """
     all_parsed = []
 
@@ -160,11 +195,12 @@ def parse_offers_detailed(flight_offers):
         currency = price_info.get("currency", "N/A")
         traveler_pricings = offer.get("travelerPricings", [])
 
+        # Each offer can contain multiple itineraries (e.g., outbound, inbound).
         itineraries = offer.get("itineraries", [])
         outbound_data = itineraries[0] if len(itineraries) > 0 else {}
         inbound_data = itineraries[1] if len(itineraries) > 1 else {}
 
-        # Parse outbound & inbound
+        # Parse outbound & inbound itineraries separately.
         parsed_outbound = parse_itinerary(outbound_data, traveler_pricings)
         parsed_inbound = parse_itinerary(inbound_data, traveler_pricings)
 
@@ -178,12 +214,12 @@ def parse_offers_detailed(flight_offers):
 
     return all_parsed
 
-
-# -----------------------------
+# ------------------------------------------------------------
 # 6. Main Flow
-# -----------------------------
+# ------------------------------------------------------------
 if __name__ == "__main__":
-    # Example search: round trip from LHR to BOM
+    # Example search parameters: Round trip from LHR (London Heathrow) 
+    # to BOM (Mumbai), departing on 2025-06-01 and returning on 2025-06-10.
     origin = "LHR"
     destination = "BOM"
     departure_date = "2025-06-01"
@@ -192,7 +228,7 @@ if __name__ == "__main__":
 
     logging.info("Fetching flight offers...")
 
-    # Fetch raw offers
+    # Fetch raw offers from the Amadeus API.
     raw_offers = get_flight_offers(
         amadeus_client,
         origin=origin,
@@ -203,14 +239,15 @@ if __name__ == "__main__":
         max_results=10000
     )
 
+    # If there are no offers, log a message and exit.
     if not raw_offers:
         logging.info("No flight offers returned.")
         exit()
 
-    # Parse offers to get detailed itinerary/cost info
+    # Parse the offers to get a more detailed data structure.
     detailed_data = parse_offers_detailed(raw_offers)
 
-    # Write the result to a JSON file
+    # Write the result to a JSON file for inspection or further processing.
     output_filename = "flight_offers.json"
     with open(output_filename, "w", encoding="utf-8") as f:
         json.dump(detailed_data, f, indent=2)
